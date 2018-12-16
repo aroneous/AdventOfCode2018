@@ -6,6 +6,7 @@ import qualified Data.List as List
 import qualified Data.List.Split as Split
 import qualified Data.ByteString as B
 import Data.Monoid (mappend)
+import Data.Maybe (fromJust)
 import Data.Char
 import Data.Ord
 import Data.Word
@@ -55,30 +56,31 @@ data CellStatus = Match | Valid | Invalid deriving Show
 data SearchState = SearchState {
     seen :: Map Coord Int, -- Cells seen during the previous iterations of this search, and distance from start point
     frontier :: Set Coord, -- Cells newly visited on latest iteration
-    found :: Set Coord -- Cells containing target race
+    found :: Set Coord -- Reached target coordinates
 } deriving Show
 
 neighbors :: Coord -> [Coord]
 neighbors (y,x) = [(y-1, x), (y+1, x), (y,x-1), (y,x+1)]
 
-cellSearchAction :: Grid -> Race -> Coord -> CellStatus
-cellSearchAction grid race coord = 
-    case Map.lookup coord grid of
-        Nothing -> Invalid
+cellSearchAction :: Grid -> Set Coord -> Coord -> CellStatus
+cellSearchAction grid targets coord = 
+    if Set.member coord targets
+    then Match
+    else case Map.lookup coord grid of
         Just Empty -> Valid
-        Just (Occupied (Beast r _)) -> if r == race then Match else Invalid
+        _ -> Invalid
 
--- Takes grid, target race, map of coords visited during this search to distance from start point, coord to search from
+-- Takes grid, target coordinates, map of coords visited during this search to distance from start point, coord to search from
 -- Returns (newly-visited valid cells, and coordinates of matching cells)
-searchFromCell :: Grid -> Race -> Map Coord Int -> Coord -> (Set Coord, Set Coord)
-searchFromCell grid race seen coord =
+searchFromCell :: Grid -> Set Coord -> Map Coord Int -> Coord -> (Set Coord, Set Coord)
+searchFromCell grid targets seen coord =
     --let distance = (seen ! coord) + 1 -- distance of new finds from start point == distance of this point + 1
         -- Find neighbors of this cell that haven't already been visited
     let newNeighbors = List.filter (\c -> not $ Map.member c seen) $ neighbors coord
         -- For each neighbor, see if it's a valid next step in the path or a target element
         result = List.foldl
             (\(newSeen, found) coord ->
-                case cellSearchAction grid race coord of
+                case cellSearchAction grid targets coord of
                     Invalid -> (newSeen, found)
                     Valid -> (Set.insert coord newSeen, found)
                     Match -> (Set.insert coord newSeen, Set.insert coord found))
@@ -86,24 +88,51 @@ searchFromCell grid race seen coord =
     in result
 
 -- Perform an interation of a search, expanding outward by one step where possible
-doSearchIteration :: Grid -> Race -> SearchState -> SearchState
-doSearchIteration grid race (SearchState seen frontier found) =
+doSearchIteration :: Grid -> Set Coord -> SearchState -> SearchState
+doSearchIteration grid targets (SearchState seen frontier found) =
         -- Evaluate all cells on the frontier
     let (allSeen, newlySeen, newFound) = (Set.foldl (\(allSeen, newlySeen, newFound) coord ->
             let newDist = (allSeen ! coord) + 1 -- Distance of newly-found cells is distance of this cell + 1
-                (hereSeen, hereFound) = searchFromCell grid race allSeen coord -- Search this cells neighbors
+                (hereSeen, hereFound) = searchFromCell grid targets allSeen coord -- Search this cells neighbors
                 allSeen' = Set.foldl (\as c -> Map.insert c newDist as) allSeen hereSeen -- Add newly-visited cells to master 'seen' map
                 newlySeen' = Set.union newlySeen hereSeen -- Add newly-visited cells to 'frontier' set
                 newFound' = Set.union newFound hereFound -- Add newly-found cells to 'found' set
             in (allSeen', newlySeen', newFound')) (seen, Set.empty, found) frontier)
     in SearchState allSeen newlySeen newFound -- Return updated master 'seen' map, the new frontier, and set of found cells
 
-findClosest :: Grid -> Race -> Coord -> Maybe Coord
-findClosest grid race start =
+findClosest :: Grid -> Set Coord -> Coord -> Maybe Coord
+findClosest grid targets start =
     let startState = SearchState (Map.singleton start 0) (Set.singleton start) Set.empty
         SearchState _ _ found = until (\(SearchState _ newlySeen found) -> not (Set.null found) || Set.null newlySeen)
-            (doSearchIteration grid race) startState
+            (doSearchIteration grid targets) startState
     in if not (Set.null found) then Just (head (Set.toList found)) else Nothing
+
+-- Get distance map with 'to' as the target, expanded to reaxch 'from'. A path is assumed to exist.
+distMap :: Grid -> Coord -> Coord -> Map Coord Int
+distMap grid from to =
+    let startState = SearchState (Map.singleton to 0) (Set.singleton to) Set.empty
+        SearchState seen _ found = until (\(SearchState _ newlySeen found) -> not (Set.null found) || Set.null newlySeen)
+            (doSearchIteration grid (Set.singleton from)) startState
+    in if not (Set.null found) then seen else error "No path found"
+
+-- Get coordinates of all beasts of the given race
+getBeasts :: Grid -> Race -> [Coord]
+getBeasts grid race =
+    let beastMap = Map.filter (\cell -> case cell of
+            Occupied (Beast r _) -> race == r
+            _ -> False) grid
+    in map fst $ Map.toList beastMap
+
+-- Get all spaces that are in range of beasts of the specified race. These are orthogonally-adjacent spaces
+-- that are available
+inRangeSpaces :: Grid -> Race -> [Coord]
+inRangeSpaces grid race =
+    let beasts = getBeasts grid race
+        possible = beasts >>= neighbors
+        inRange = filter (\coord -> case Map.lookup coord grid of
+                Just Empty -> True
+                _ -> False) possible
+    in inRange
 
 -- Coordinate should be in (y, x) form to take advantage of natural ordering to result in top-to-bottom, left-to-right
 addCellEntry :: Grid -> Char -> Coord -> Grid
@@ -127,14 +156,19 @@ printCell mc =
         Just (Occupied (Beast Elf _)) -> 'E'
         Just (Occupied (Beast Goblin _)) -> 'G'
 
-printRow :: Grid -> Int -> [Int] -> String
-printRow grid y xs =
-    map (printCell.(\x -> Map.lookup (y,x) grid)) xs
+printRow :: Grid -> Int -> [Int] -> Map Coord Char -> String
+printRow grid y xs annotations =
+    map (\x -> case Map.lookup (y,x) annotations of
+            Just char -> char
+            Nothing -> printCell (Map.lookup (y,x) grid)) xs
+
+printGridAnnotated :: Grid -> Coord -> Map Coord Char -> String
+printGridAnnotated grid (height, width) annotations =
+    let rows = map (\y -> printRow grid y [0..width] annotations) [0..height]
+    in List.intercalate "\n" rows
 
 printGrid :: Grid -> Coord -> String
-printGrid grid (height, width) =
-    let rows = map (\y -> printRow grid y [0..width]) [0..height]
-    in List.intercalate "\n" rows
+printGrid grid hw = printGridAnnotated grid hw Map.empty
 
 main = do
     contents <- getContents
@@ -148,9 +182,18 @@ main = do
         beastList = Map.toList beasts
         (coord, _) = head beastList
         (coord2, _) = beastList !! 1
-        closest = findClosest grid Elf coord
-        closest2 = findClosest grid Elf coord2
+        inRange = inRangeSpaces grid Elf
+        inRangeSet = Set.fromList inRange
+        closest = findClosest grid inRangeSet coord
+        closest2 = findClosest grid inRangeSet coord2
+        toCoord = fromJust closest
+        fromCoord = coord
+        dists = distMap grid fromCoord toCoord
+        distChars = Map.map (\d -> head $ show (d `mod` 10)) dists
     putStrLn $ printGrid grid (height, width)
-    print beasts
+    putStrLn $ printGridAnnotated grid (height, width) distChars
+    --putStrLn $ printGridAnnotated grid (height, width) (Map.fromList (zip (Set.toList inRangeSet) (repeat '?')))
+    --print beasts
     print closest
     print closest2
+    --print inRange
