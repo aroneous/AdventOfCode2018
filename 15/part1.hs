@@ -9,8 +9,6 @@ import Data.Monoid (mappend)
 import Data.Maybe (fromJust)
 import Data.Char
 import Data.Ord
-import Data.Word
-import Codec.BMP
 import Debug.Trace (trace)
 
 data Race = Elf | Goblin deriving (Show, Eq)
@@ -33,6 +31,9 @@ attackPower = 3
 
 startingElf = Occupied (Beast Elf startHp)
 startingGoblin = Occupied (Beast Goblin startHp)
+
+enemy Elf = Goblin
+enemy Goblin = Elf
 
 newCoord :: Coord -> Direction -> Coord
 newCoord (y, x) dir =
@@ -123,6 +124,14 @@ getBeasts grid race =
             _ -> False) grid
     in map fst $ Map.toList beastMap
 
+getBeastMap :: Grid -> Map Coord Beast
+getBeastMap grid =
+    let beastCells = Map.filter (\cell -> case cell of
+            Occupied (Beast _ _) -> True
+            _ -> False) grid
+    in Map.map (\cell -> case cell of
+            Occupied b -> b) beastCells
+
 -- Get all spaces that are in range of beasts of the specified race. These are orthogonally-adjacent spaces
 -- that are available
 inRangeSpaces :: Grid -> Race -> [Coord]
@@ -133,6 +142,97 @@ inRangeSpaces grid race =
                 Just Empty -> True
                 _ -> False) possible
     in inRange
+
+-- Find adjacent cells containing a beast of the specified race
+targetsInRange :: Grid -> Race -> Coord -> [Coord]
+targetsInRange grid targetRace coord = filter (\c -> case Map.lookup c grid of
+        Just (Occupied (Beast r _)) -> r == targetRace
+        _ -> False) $ neighbors coord
+
+preferredTarget :: Grid -> Race -> Coord -> Maybe Coord
+preferredTarget grid targetRace coord =
+    let targets = List.foldl (\l c -> case Map.lookup c grid of
+            Just (Occupied (Beast r hp)) -> if r == targetRace then ((hp, c):l) else l
+            _ -> l) [] $ neighbors coord
+        sorted = List.sort targets
+    in if List.null sorted then Nothing else Just (snd (head sorted))
+
+doMove :: Grid -> Coord -> Coord -> Coord
+doMove grid pos target =
+    let dm = distMap grid pos target
+        neigh = Set.fromList (neighbors pos)
+        possibleMoves = Map.filterWithKey (\c _ -> Set.member c neigh) dm
+        (nextCoord, _) = Map.findMin possibleMoves
+    in nextCoord
+
+-- Move and possibly attack
+-- Return updated grid and maybe coordinates of a killed enemy
+doMoveAndAttack :: Grid -> Coord -> Race -> (Grid, Maybe Coord)
+doMoveAndAttack grid coord targetRace =
+    case findClosest grid (Set.fromList $ getBeasts grid targetRace) coord of
+        Just target ->
+            let nextCoord = doMove grid coord target
+                beast = grid ! coord
+                grid' = Map.insert coord Empty grid
+                grid'' = Map.insert nextCoord beast grid'
+                maybeTarget = preferredTarget grid'' targetRace nextCoord
+            in case maybeTarget of
+                Nothing -> (grid'', Nothing)
+                Just target -> doAttack grid'' target nextCoord
+        Nothing -> (grid, Nothing) -- Nothing we can reach - just stay where we are
+
+-- Attack in-range target
+-- Return updated grid and maybe coordinates of a killed enemy
+doAttack :: Grid -> Coord -> Coord -> (Grid, Maybe Coord)
+doAttack grid target coord =
+    let Occupied (Beast r hp) = grid ! target
+        newHp = hp - attackPower
+        killed = if newHp <= 0 then Just target else Nothing
+        grid' = if newHp <= 0
+            then Map.insert target Empty grid
+            else Map.insert target (Occupied (Beast r newHp)) grid
+    in (grid', killed)
+
+-- Return updated grid and maybe coordinates of a killed enemy
+doTurnForUnit :: Grid -> Coord -> (Grid, Maybe Coord)
+doTurnForUnit grid coord =
+    let Occupied (Beast race hp) = grid ! coord -- Get details of cell occupant (assumed to exist)
+        targetRace = enemy race
+        maybeTarget = preferredTarget grid targetRace coord
+        result = case maybeTarget of
+            Nothing -> doMoveAndAttack grid coord targetRace
+            Just target -> doAttack grid target coord
+    in result
+
+doTurn :: Grid -> (Grid, Bool)
+doTurn grid =
+    let beastMap = getBeastMap grid -- The beasts we have to process a turn for (unless they die before their turn)
+        (nextGrid, killed, done) = Map.foldlWithKey (\(grid', killed, done) coord beast ->
+                if done
+                then (grid', killed, True) -- Combat already done - stop
+                else if Set.member coord killed
+                    then (grid', killed, False) -- Unit killed this turn - skip
+                    else if List.null (getBeasts grid' (enemy (race beast)))
+                        then (grid', killed, True) -- Combat done! No enemies
+                        else
+                            let (grid'', maybeKilled) = doTurnForUnit grid' coord
+                                killed' = case maybeKilled of
+                                        Just killedCoord -> Set.insert killedCoord killed
+                                        Nothing -> killed
+                            in (grid'', killed', False)) (grid, Set.empty, False) beastMap
+    in (nextGrid, done)
+
+-- Return final grid and number of full rounds
+playGame :: Grid -> Coord -> (Grid, Int)
+playGame grid hw =
+    --let (grid', done) = trace "doing turn" (doTurn grid)
+    let (grid', done) = doTurn grid
+    in
+        if done
+        then (grid', 0)
+        else
+            let (grid'', rounds) = playGame grid' hw
+            in (grid'', rounds + 1)
 
 -- Coordinate should be in (y, x) form to take advantage of natural ordering to result in top-to-bottom, left-to-right
 addCellEntry :: Grid -> Char -> Coord -> Grid
@@ -190,10 +290,20 @@ main = do
         fromCoord = coord
         dists = distMap grid fromCoord toCoord
         distChars = Map.map (\d -> head $ show (d `mod` 10)) dists
+        (grid', numRound) = playGame grid (height, width)
+        remainingHp = Map.foldl (\sum beast -> sum + hp beast) 0 (getBeastMap grid')
+        answer = numRound * remainingHp
     putStrLn $ printGrid grid (height, width)
-    putStrLn $ printGridAnnotated grid (height, width) distChars
+    --putStrLn $ printGridAnnotated grid (height, width) distChars
     --putStrLn $ printGridAnnotated grid (height, width) (Map.fromList (zip (Set.toList inRangeSet) (repeat '?')))
     --print beasts
-    print closest
-    print closest2
+    --print closest
+    --print closest2
     --print inRange
+    putStrLn $ printGrid grid' (height, width)
+    putStr "Num rounds: "
+    print numRound
+    putStr "Remaining hit points: "
+    print remainingHp
+    putStr "Answer: "
+    print answer
