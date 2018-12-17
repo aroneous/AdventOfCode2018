@@ -243,13 +243,26 @@ parseSamples lines =
             let (samples, rest') = parseSamples (rest)
             in (sample:samples, rest')
 
+runInst :: Map Int Op -> Inst -> [Int] -> [Int]
+runInst opCodeMap inst regs =
+    let opCode = opCodeMap ! (op inst)
+        vao = opsByCode ! opCode
+    in (apply vao) inst regs
+
+runProgram :: Map Int Op -> [Inst] -> [Int]
+runProgram opCodeMap insts = List.foldl (\reg inst -> runInst opCodeMap inst reg) [0,0,0,0] insts
+
 main = do
     contents <- getContents
     let l = lines contents
-        (samples, _) = parseSamples l
+        (samples, rest) = parseSamples l
+        startProgram = dropWhile (\line -> length line < 2) rest
+        program = map parseInstruction startProgram
         --canBeThree = filter checkSample samples
         opCodes = findOpCodes samples
+        finalState = runProgram opCodes program
     --print $ samples !! 0
     --print $ canBeThree
     --print $ length canBeThree
     print $ opCodes
+    print finalState
