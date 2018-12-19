@@ -101,7 +101,13 @@ processDrip maxy grid drips drip =
         then
             let (grid', drips', downState) = processDrip maxy grid drips (down drip)
             in if downState == Pooling
-                then fillLevel grid' drips' drip
+                then
+                    let (grid'', newDrips, downState') = fillLevel grid' Set.empty drip
+                    in if not $ Set.null newDrips
+                        then
+                            let (grid''', _) = processDrips maxy grid'' newDrips
+                            in fillLevel grid''' drips' drip
+                        else (grid'', drips', downState)
                 else
                     let grid'' = Map.insert drip Drip grid'
                     in (grid'', drips', Dripping)
@@ -114,7 +120,8 @@ processDrips maxy grid drips =
         Just drip ->
             let drips' = Set.deleteMin drips
                 (grid', drips'', _) = processDrip maxy grid drips' drip
-            in trace (show drips'') $ processDrips maxy grid' drips''
+            --in trace (show drips'') $ processDrips maxy grid' drips''
+            in processDrips maxy grid' drips''
             --in (grid', drips'')
 
 parseLine :: String -> [Coord]
