@@ -36,16 +36,8 @@ data PatternElement = Steps StepList | Subpattern [Pattern] deriving Show
 -- A pattern is a list of pattern elements
 type Pattern = [PatternElement]
 
--- Iteration state of a subpattern is the index of currently-selected subpattern element,
--- and nested subpattern iteration state for that subpattern
-data SubpatState = SubpatState {
-    idx :: Int,
-    iterState :: [SubpatState]
-} deriving Show
-
--- Iteration state of a pattern is a list of the subpattern states for subpatterns within the pattern
-type IterationState = [SubpatState]
-
+-- Parsing input and building tree structure
+--
 parseStepList :: String -> (StepList, String)
 parseStepList (p:ps)
     | p `elem` ['N','S','E','W'] =
@@ -83,6 +75,8 @@ parsePattern (p:ps)
     | p `elem` "|)$" = ([],(p:ps)) -- Terminating condition of a Pattern - new alternative, end of subgroup, end of input
     | otherwise = error $ "Unexpected input in parsePattern: " ++ (take 5 (p:ps)) ++ "..."
 
+-- Iterating direction list
+
 makeDoor :: Coord -> Coord -> Doorway
 makeDoor a b = if a < b then (a, b) else (b, a)
 
@@ -119,6 +113,8 @@ iteratePattern starts (Subpattern pe:pes) =
         (ends', doors') = iteratePattern ends pes
     in (ends', Set.union doors doors')
 
+-- Printing board
+
 doorsFrom :: Doors -> Coord -> (String, String)
 doorsFrom d (x, y) =
     let across = if Set.member ((x,y), (x+1,y)) d then '|' else '#'
@@ -149,9 +145,34 @@ printBoard doors =
         board' = List.intercalate "\n" $ tail board
     in board'
 
+-- Traversing board to find distance
+
+neighbors :: Doors -> Coord -> Set Coord
+neighbors doors (x,y) =
+    let doorways = filter (\c -> Set.member c doors) [((x-1,y),(x,y)),((x,y-1),(x,y)),((x,y),(x+1,y)),((x,y),(x,y+1))]
+        coords = Set.fromList $ doorways >>= (\(a,b) -> [a,b])
+    in Set.delete (x,y) coords
+
+-- Takes set of all seen coordinates, starting points to look outward from, and returns newly-found points
+findUnseenNeighbors :: Doors -> Set Coord -> Set Coord -> Set Coord
+findUnseenNeighbors doors seen starts =
+    let allNeighbors = Set.foldl Set.union Set.empty $ Set.map (neighbors doors) starts
+        unseenNeighbors = Set.filter (\c -> not $ Set.member c seen) allNeighbors
+    in unseenNeighbors
+
+findFarthest :: Doors -> Set Coord -> Set Coord -> Int
+findFarthest doors seen starts
+    | Set.null starts = -1
+    | otherwise = 
+        let freshMeat = findUnseenNeighbors doors seen starts
+            seen' = Set.union seen freshMeat
+        in 1 + (findFarthest doors seen' freshMeat)
+
 main = do
     contents <- getContents
     let (patt, _) = parsePattern $ tail contents
         (ends, doors) = iteratePattern (Set.singleton (0,0)) patt
-    print doors
+        farthest = findFarthest doors (Set.singleton (0,0)) (Set.singleton (0,0))
+    --print doors
     putStrLn $ printBoard doors
+    print farthest
