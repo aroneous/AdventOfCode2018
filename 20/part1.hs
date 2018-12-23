@@ -83,7 +83,75 @@ parsePattern (p:ps)
     | p `elem` "|)$" = ([],(p:ps)) -- Terminating condition of a Pattern - new alternative, end of subgroup, end of input
     | otherwise = error $ "Unexpected input in parsePattern: " ++ (take 5 (p:ps)) ++ "..."
 
+makeDoor :: Coord -> Coord -> Doorway
+makeDoor a b = if a < b then (a, b) else (b, a)
+
+addDoorway :: Coord -> Dir -> (Coord, Doorway)
+addDoorway (sx, sy) dir =
+    let end = case dir of
+            N -> (sx, sy-1)
+            S -> (sx, sy+1)
+            E -> (sx+1, sy)
+            W -> (sx-1, sy)
+        door = makeDoor (sx, sy) end
+    in (end, door)
+
+executeStepList :: StepList -> Coord -> (Coord, Doors)
+executeStepList steps start = List.foldl (\(s, ds) dir ->
+        let (end, door) = addDoorway s dir
+        in (end, Set.insert door ds)) (start, Set.empty) steps
+
+iteratePattern :: Set Coord -> Pattern -> (Set Coord, Doors)
+iteratePattern starts [] = (starts, Set.empty)
+iteratePattern starts (Steps pe:pes) =
+    let (ends, doors) = Set.foldl (\(ends, doors) start ->
+            let (e, ds) = executeStepList pe start
+            in (Set.insert e ends, Set.union doors ds))
+                (Set.empty, Set.empty) starts
+        (ends', doors') = iteratePattern ends pes
+    in (ends', Set.union doors doors')
+iteratePattern starts (Subpattern pe:pes) =
+    -- pe is [Pattern]. Recurse across them
+    let (ends, doors) = List.foldl (\(ends, doors) sp ->
+            let (es, ds) = iteratePattern starts sp
+            in (Set.union ends es, Set.union doors ds))
+                (Set.empty, Set.empty) pe
+        (ends', doors') = iteratePattern ends pes
+    in (ends', Set.union doors doors')
+
+doorsFrom :: Doors -> Coord -> (String, String)
+doorsFrom d (x, y) =
+    let across = if Set.member ((x,y), (x+1,y)) d then '|' else '#'
+        down = if Set.member ((x,y), (x,y+1)) d then '-' else '#'
+        room = if (x, y) == (0, 0) then 'X' else '.'
+    in ([room,across], [down, '#'])
+    --in ([across,room], ['#',down]) -- building in reverse
+
+printBoard :: Doors -> String
+printBoard doors =
+    let ((minx, miny), (maxx, maxy)) = Set.foldl (\((minx, miny), (maxx, maxy)) ((x1, y1), (x2, y2)) ->
+            ((min minx x1, min miny y1), (max maxx x2, max maxy y2))) ((0, 0), (0, 0)) doors
+        (racrosses, rdowns) = List.foldl (\(acrosses, downs) y ->
+                let (across, down) = List.foldl (\(across, down) x ->
+                        let (a, d) = doorsFrom doors (x,y)
+                        in (across ++ a, down ++ d)) ("#","#") [minx..maxx]
+                in (across:acrosses, down:downs)) ([],[]) [miny-1..maxy]
+        --acrosses = map reverse $ reverse racrosses
+        --downs = map reverse $ reverse rdowns
+        acrosses = reverse racrosses
+        downs = reverse rdowns
+        --acrosses' = map (List.intersperse '.') acrosses
+        --downs' = map (List.intersperse '#') downs
+        --acrosses'' = map tail acrosses'
+        --downs'' = tail downs'
+        --downs'' = map (tail.init) downs'
+        board = zipWith (\a b -> [a, b]) acrosses downs >>= (\a -> a)
+        board' = List.intercalate "\n" $ tail board
+    in board'
+
 main = do
     contents <- getContents
     let (patt, _) = parsePattern $ tail contents
-    print patt
+        (ends, doors) = iteratePattern (Set.singleton (0,0)) patt
+    print doors
+    putStrLn $ printBoard doors
