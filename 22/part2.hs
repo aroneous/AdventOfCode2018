@@ -79,6 +79,7 @@ toolForTransition a b =
         (1, 2) -> Neither
 
 neighbors :: Coord -> [Coord]
+--neighbors (x,y) = filter (\(x,y) -> x >= 0 && y >= 0 && x < (fst target) * 2 && y < (snd target) * 2) [(x-1, y), (x+1, y), (x,y-1), (x,y+1)]
 neighbors (x,y) = filter (\(x,y) -> x >= 0 && y >= 0) [(x-1, y), (x+1, y), (x,y-1), (x,y+1)]
 
 neighborCosts :: Tool -> Map Coord Int -> Coord -> (Map Coord Int, [(Coord, (Tool, Int))])
@@ -92,23 +93,28 @@ neighborCosts tool board coord =
         costs = map (\(c, toType) ->
                 let newTool = if fromType == toType then tool else toolForTransition fromType toType
                     cost = if newTool == tool then 1 else 8
-                in (c, (newTool, cost))) neighborTypes
+                    cost' = if c == target
+                        then if newTool /= Torch then cost + 7  else cost
+                        else cost
+                in (c, (newTool, cost'))) neighborTypes
     in (board'', costs)
 
-findCellToProcess :: DistMap -> Set Coord -> (Set Coord, Coord)
-findCellToProcess distMap frontierSet =
-    let candidateMap = Map.filterWithKey (\coord _ -> Set.member coord frontierSet) distMap
-        (coord, _) = List.minimumBy (comparing (snd.snd)) $ Map.toList candidateMap
-        frontierSet' = Set.delete coord frontierSet
+findCellToProcess :: Map Int (Set Coord) -> (Map Int (Set Coord), Coord)
+findCellToProcess frontierSet =
+    let (minVal, closestSet) = Map.findMin frontierSet
+        coord = Set.findMin closestSet
+        closestSet' = Set.difference closestSet (Set.singleton coord)
+        frontierSet' = if Set.null closestSet' then Map.deleteMin frontierSet else Map.insert minVal closestSet' frontierSet
     in (frontierSet', coord)
 
-iterateDist :: Map Coord Int -> DistMap -> Set Coord -> (Map Coord Int, DistMap, Set Coord)
+iterateDist :: Map Coord Int -> DistMap -> Map Int (Set Coord) -> (Map Coord Int, DistMap, Map Int (Set Coord))
 iterateDist board distMap frontierSet =
     --let (frontierSet', toProcess) = trace (show $ Map.findMax distMap) $ findCellToProcess distMap frontierSet
-    let (frontierSet', toProcess) = findCellToProcess distMap frontierSet
+    let (frontierSet', toProcess) = findCellToProcess frontierSet
         (tool, currDist) = distMap ! toProcess
         --(tool, currDist) = trace (show toProcess) $ distMap ! toProcess
-        (board', costs) = neighborCosts tool board toProcess
+        --(board', costs) = neighborCosts tool board toProcess
+        (board', costs) = trace ((show toProcess) ++ " = " ++ (show currDist)) $ neighborCosts tool board toProcess
         costs' = map (\(coord, (tool, cost)) -> (coord, (tool, cost + currDist))) costs
         (distMap', frontierSet'') = List.foldl (\(dm, fs) (coord, (tool, newDist)) ->
                 let doAdd = case Map.lookup coord dm of
@@ -117,27 +123,33 @@ iterateDist board distMap frontierSet =
                 in if doAdd
                     then
                         let dm' = Map.insert coord (tool, newDist) dm
-                            fs' = Set.insert coord fs
+                            fs' = Map.insertWith Set.union newDist (Set.singleton coord) fs
                         in (dm', fs')
                     else (dm, fs)) (distMap, frontierSet') costs'
     in (board', distMap', frontierSet'')
 
 findTarget :: Map Coord Int -> Int
 findTarget board =
-    let initDistMap = Map.singleton (0,0) (Torch, 0)
-        initFrontierSet = Set.singleton (0,0)
+    let initDistMap = Map.singleton origin (Torch, 0)
+        initFrontierSet = Map.singleton 0 (Set.singleton origin)
+    --let initDistMap = Map.singleton target (Torch, 0)
+        --initFrontierSet = Set.singleton target
         (_, finalDistMap, _) = until (\(_, dm, fs) ->
-                let (_, toProcess) = findCellToProcess dm fs
-                in toProcess == target)
+                let (_, toProcess) = findCellToProcess fs
+                in toProcess == finish)
             (\(b, dm, fs) -> iterateDist b dm fs)
             (board, initDistMap, initFrontierSet)
-        (finalTool, targetDist) = finalDistMap ! target
-        targetDist' = if finalTool == Torch then targetDist else targetDist + 7
-    in targetDist
+        (finalTool, targetDist) = finalDistMap ! finish
+    in trace ("End: " ++ (show finalTool) ++ " " ++ (show targetDist)) targetDist
 
 -- From input
 depth = 7863
 target = (14,760)
+
+--origin = target
+--finish = (0,0)
+origin = (0,0)
+finish = target
 
 -- Test input
 --depth = 510
