@@ -20,7 +20,9 @@ data Tool = Neither | Torch | Climbing deriving (Show, Eq, Ord)
 
 type Coord = (Int, Int)
 
-type DistMap = Map Coord (Tool, Int)
+type DistMap = Map (Coord, Tool) Int
+
+type FrontSet = Set (Coord, Tool)
 
 erosionLevel :: Map Coord Int -> Coord -> (Map Coord Int, Int)
 erosionLevel board coord =
@@ -99,7 +101,7 @@ neighborCosts tool board coord =
                 in (c, (newTool, cost'))) neighborTypes
     in (board'', costs)
 
-findCellToProcess :: Map Int (Set Coord) -> (Map Int (Set Coord), Coord)
+findCellToProcess :: Map Int FrontSet -> (Map Int FrontSet, (Coord, Tool))
 findCellToProcess frontierSet =
     let (minVal, closestSet) = Map.findMin frontierSet
         coord = Set.findMin closestSet
@@ -107,40 +109,41 @@ findCellToProcess frontierSet =
         frontierSet' = if Set.null closestSet' then Map.deleteMin frontierSet else Map.insert minVal closestSet' frontierSet
     in (frontierSet', coord)
 
-iterateDist :: Map Coord Int -> DistMap -> Map Int (Set Coord) -> (Map Coord Int, DistMap, Map Int (Set Coord))
+iterateDist :: Map Coord Int -> DistMap -> Map Int FrontSet -> (Map Coord Int, DistMap, Map Int FrontSet)
 iterateDist board distMap frontierSet =
     --let (frontierSet', toProcess) = trace (show $ Map.findMax distMap) $ findCellToProcess distMap frontierSet
     let (frontierSet', toProcess) = findCellToProcess frontierSet
-        (tool, currDist) = distMap ! toProcess
+        currDist = distMap ! toProcess
+        (coordToProcess, tool) = toProcess
         --(tool, currDist) = trace (show toProcess) $ distMap ! toProcess
         --(board', costs) = neighborCosts tool board toProcess
-        (board', costs) = trace ((show toProcess) ++ " = " ++ (show currDist)) $ neighborCosts tool board toProcess
+        (board', costs) = trace ((show toProcess) ++ " = " ++ (show currDist)) $ neighborCosts tool board coordToProcess
         costs' = map (\(coord, (tool, cost)) -> (coord, (tool, cost + currDist))) costs
         (distMap', frontierSet'') = List.foldl (\(dm, fs) (coord, (tool, newDist)) ->
-                let doAdd = case Map.lookup coord dm of
+                let doAdd = case Map.lookup (coord, tool) dm of
                         Nothing -> True
-                        Just (_, currDist) -> newDist < currDist
+                        Just currDist -> newDist < currDist
                 in if doAdd
                     then
-                        let dm' = Map.insert coord (tool, newDist) dm
-                            fs' = Map.insertWith Set.union newDist (Set.singleton coord) fs
+                        let dm' = Map.insert (coord, tool) newDist dm
+                            fs' = Map.insertWith Set.union newDist (Set.singleton (coord, tool)) fs
                         in (dm', fs')
                     else (dm, fs)) (distMap, frontierSet') costs'
     in (board', distMap', frontierSet'')
 
 findTarget :: Map Coord Int -> Int
 findTarget board =
-    let initDistMap = Map.singleton origin (Torch, 0)
-        initFrontierSet = Map.singleton 0 (Set.singleton origin)
+    let initDistMap = Map.singleton (origin, Torch) 0
+        initFrontierSet = Map.singleton 0 (Set.singleton (origin, Torch))
     --let initDistMap = Map.singleton target (Torch, 0)
         --initFrontierSet = Set.singleton target
         (_, finalDistMap, _) = until (\(_, dm, fs) ->
-                let (_, toProcess) = findCellToProcess fs
+                let (_, (toProcess, _)) = findCellToProcess fs
                 in toProcess == finish)
             (\(b, dm, fs) -> iterateDist b dm fs)
             (board, initDistMap, initFrontierSet)
-        (finalTool, targetDist) = finalDistMap ! finish
-    in trace ("End: " ++ (show finalTool) ++ " " ++ (show targetDist)) targetDist
+        targetDist = finalDistMap ! (finish, Torch)
+    in trace ("End: " ++ (show targetDist)) targetDist
 
 -- From input
 depth = 7863
